@@ -1,35 +1,174 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { OrbitControls } from "@react-three/drei";
+import { Canvas } from "@react-three/fiber";
+import { data } from "./data";
+import * as THREE from "three";
+import Tubes from "./BrainTubes";
+import { extend } from "@react-three/fiber";
+import { shaderMaterial } from "@react-three/drei";
+import { useMemo } from "react";
+import { useRef } from "react";
+import { useEffect } from "react";
+import { useFrame } from "@react-three/fiber";
 
-function App() {
-  const [count, setCount] = useState(0)
+const randomRange = (max, min) => {
+  return Math.random() * (max - min) + min;
+};
+
+let curves = [];
+// curves
+for (let i = 0; i < 100; ++i) {
+  let points = [];
+  let length = randomRange(0.5, 1);
+  // points
+  for (let j = 0; j < 100; ++j) {
+    points.push(
+      new THREE.Vector3().setFromSphericalCoords(
+        2,
+        Math.PI - (j / 100) * Math.PI * length,
+        (i / 100) * Math.PI * 2
+      )
+    );
+  }
+  let tempCurve = new THREE.CatmullRomCurve3(points);
+  curves.push(tempCurve);
+}
+
+const PATHS = data.economics[0].paths;
+
+let brainCurves = [];
+PATHS.forEach((path) => {
+  let points = [];
+  for (let i = 0; i < path.length; i += 3) {
+    points.push(new THREE.Vector3(path[i], path[i + 1], path[i + 2]));
+  }
+  let tempCurve = new THREE.CatmullRomCurve3(points);
+  brainCurves.push(tempCurve);
+});
+
+function BrainParticles({ brainCurves }) {
+  const myPoints = useRef([]);
+  const brainGeo = useRef();
+
+  let density = 10;
+  let numberOfPoints = density * brainCurves.length;
+  let positions = useMemo(() => {
+    let positions = [];
+    for (let i = 0; i < 100; ++i) {
+      positions.push(
+        randomRange(-1, 1),
+        randomRange(-1, 1),
+        randomRange(-1, 1)
+      );
+    }
+    return new Float32Array(positions);
+  }, []);
+
+  let randoms = useMemo(() => {
+    let randoms = [];
+    for (let i = 0; i < 100; ++i) {
+      randoms.push(randomRange(0.3, 1));
+    }
+    return new Float32Array(randoms);
+  }, []);
+
+  useEffect(() => {
+    for (let i = 0; i < brainCurves.length; ++i) {
+      for (let j = 0; j < density; ++j) {
+        myPoints.current.push({
+          currentOffset: Math.random(),
+          speed: Math.random() * 0.01,
+          curve: brainCurves[i],
+          currPosition: Math.random(),
+        });
+      }
+    }
+  });
+
+  useFrame(({ clock }) => {
+    let currPositions = brainGeo.current.attributes.position.array;
+    for (let i = 0; i < myPoints.current.length; ++i) {
+      myPoints.current[i].currPosition += myPoints.current[i].speed;
+      myPoints.current[i].currPosition = myPoints.current[i].currPosition % 1;
+
+      let currPoint = myPoints.current[i].curve.getPointAt(
+        myPoints.current[i].currPosition
+      );
+      currPositions[i * 3] = currPoint.x;
+      currPositions[i * 3 + 1] = currPoint.y;
+      currPositions[i * 3 + 2] = currPoint.z;
+    }
+    brainGeo.current.attributes.position.needsUpdate = true;
+  });
+
+  const BrainParticleMaterial = shaderMaterial(
+    { time: 0, color: new THREE.Color(0.1, 0.3, 0.6) },
+    // vertex shader
+    /*glsl*/ `
+    varying vec2 vUv;
+    uniform float time;
+    attribute float randoms;
+
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = randoms * 2.  * (1./ -mvPosition.z);
+      // gl_PointSize = 50.;
+    }
+  `,
+    // fragment shader
+    /*glsl*/ `
+    uniform float time;
+
+    void main() {
+      float disc = length(gl_PointCoord.xy - vec2(0.5));
+      float opacity = 0.3*smoothstep(0.5,0.4,disc);
+      gl_FragColor.rgba = vec4(vec3(opacity),1.);
+    }
+  `
+  );
+  extend({ BrainParticleMaterial });
 
   return (
     <>
-      <div>
-        <a href="https://vitejs.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
+      <points>
+        <bufferGeometry attach="geometry" ref={brainGeo}>
+          <bufferAttribute
+            attach="attributes-position"
+            count={positions.length / 3}
+            array={positions}
+            itemSize={3}
+          />
+          <bufferAttribute
+            attach="attributes-randoms"
+            count={randoms.length}
+            array={randoms}
+            itemSize={1}
+          />
+        </bufferGeometry>
+        <brainParticleMaterial
+          attach="material"
+          depthTest={false}
+          transparent={true}
+          depthWrite={false}
+          blending={THREE.AdditiveBlending}
+        />
+      </points>
     </>
-  )
+  );
 }
 
-export default App
+function App() {
+  return (
+    <Canvas camera={{ position: [0, 0, 0.3], near: 0.001, far: 5 }}>
+      <color attach="background" args={["black"]} />
+      <ambientLight />
+      <pointLight position={[10, 10, 10]} />
+      <Tubes brainCurves={brainCurves} />
+      <BrainParticles brainCurves={brainCurves} />
+      <OrbitControls />
+    </Canvas>
+  );
+}
+
+export default App;
